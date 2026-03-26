@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string>
 #include <stdexcept>
+#include <vector>
 
 class D3dxIniUtils {
 public:
@@ -18,6 +19,7 @@ public:
 	bool require_admin = false;
 	std::wstring delay = L"";
 	std::wstring unlocker_dll = L"";
+	std::vector<std::wstring> extra_dlls;
 
 	std::wstring parse_error = L"";
 
@@ -57,6 +59,9 @@ public:
 			parse_error = L"无法读取d3dx.ini\n";
 			return;
 		}
+
+		// Null-terminate the buffer
+		buf[filesize] = '\0';
 
 		CloseHandle(ini_file);
 
@@ -98,10 +103,14 @@ public:
 		char unlocker_dll_path[MAX_PATH];
 		if (find_ini_setting_lite(ini_section, "unlocker_dll", unlocker_dll_path, MAX_PATH)) {
 			this->unlocker_dll = ToWideString(std::string(unlocker_dll_path));
+			this->extra_dlls.push_back(this->unlocker_dll);
 		}
 
-	}
+		// Parse extra_dll entries: extra_dll, extra_dll_1, extra_dll_2, ...
+		find_all_indexed_settings(ini_section, "extra_dll", this->extra_dlls);
 
+		delete[] buf;
+	}
 
 
 
@@ -255,5 +264,29 @@ public:
 	}
 
 
+	// Find all settings matching "base_name" and "base_name_N" (N=1,2,3,...) 
+	// and append their values to the results vector.
+	void find_all_indexed_settings(const char* ini_section, const char* base_name, std::vector<std::wstring>& results)
+	{
+		char val[MAX_PATH];
+
+		// First try the base name itself: extra_dll = xxx
+		if (find_ini_setting_lite(ini_section, base_name, val, MAX_PATH)) {
+			std::wstring w = ToWideString(std::string(val));
+			if (!w.empty())
+				results.push_back(w);
+		}
+
+		// Then try indexed: extra_dll_1, extra_dll_2, ..., up to a reasonable limit
+		for (int i = 1; i <= 32; i++) {
+			char key[64];
+			sprintf_s(key, sizeof(key), "%s_%d", base_name, i);
+			if (find_ini_setting_lite(ini_section, key, val, MAX_PATH)) {
+				std::wstring w = ToWideString(std::string(val));
+				if (!w.empty())
+					results.push_back(w);
+			}
+		}
+	}
 
 };

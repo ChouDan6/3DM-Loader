@@ -586,30 +586,52 @@ int main()
 		printf("3DMigoto 已就绪 - 请启动游戏。\n");
 	}
 
-	// 如果配置了 unlocker_dll，先等目标进程出现并注入 UnlockerIsland（在 3DMigoto 验证之前）
-	if (!d3dxIniUtils.unlocker_dll.empty()) {
-		printf("\n[UnlockerIsland] ========================================\n");
-		printf("[UnlockerIsland] unlocker_dll 配置值: %s\n", d3dxIniUtils.ToByteString(d3dxIniUtils.unlocker_dll).c_str());
-		printf("[UnlockerIsland] target 配置值: %s\n", d3dxIniUtils.ToByteString(d3dxIniUtils.target).c_str());
+	// 如果配置了额外的 DLL（unlocker_dll 和/或 extra_dll），等待目标进程出现并逐一注入
+	if (!d3dxIniUtils.extra_dlls.empty()) {
+		printf("\n[DLL Injector] ========================================\n");
+		printf("[DLL Injector] 共发现 %zu 个额外 DLL 需要注入\n", d3dxIniUtils.extra_dlls.size());
+		printf("[DLL Injector] target 配置值: %s\n", d3dxIniUtils.ToByteString(d3dxIniUtils.target).c_str());
+
+		for (size_t i = 0; i < d3dxIniUtils.extra_dlls.size(); i++) {
+			printf("[DLL Injector]   [%zu] %s\n", i + 1, d3dxIniUtils.ToByteString(d3dxIniUtils.extra_dlls[i]).c_str());
+		}
 
 		wchar_t cwd[MAX_PATH];
 		if (GetCurrentDirectoryW(MAX_PATH, cwd)) {
-			printf("[UnlockerIsland] 当前工作目录: %S\n", cwd);
+			printf("[DLL Injector] 当前工作目录: %S\n", cwd);
 		}
 
-		printf("[UnlockerIsland] 正在等待目标进程出现...\n");
+		printf("[DLL Injector] 正在等待目标进程出现...\n");
 		DWORD target_pid = wait_for_target_pid(d3dxIniUtils.ToByteString(d3dxIniUtils.target).c_str(), launch);
 		if (target_pid != 0) {
-			printf("[UnlockerIsland] 找到目标进程 (PID: %d)，正在注入...\n", target_pid);
-			if (inject_dll_into_process(target_pid, d3dxIniUtils.unlocker_dll.c_str())) {
-				printf("[UnlockerIsland] UnlockerIsland DLL 注入成功 :)\n");
-			} else {
-				printf("[UnlockerIsland] UnlockerIsland DLL 注入失败！\n");
+			printf("[DLL Injector] 找到目标进程 (PID: %d)\n", target_pid);
+
+			int success_count = 0;
+			int fail_count = 0;
+			for (size_t i = 0; i < d3dxIniUtils.extra_dlls.size(); i++) {
+				const std::wstring& dll = d3dxIniUtils.extra_dlls[i];
+				printf("\n[DLL Injector] --- 正在注入第 %zu/%zu 个 DLL ---\n", i + 1, d3dxIniUtils.extra_dlls.size());
+				printf("[DLL Injector] DLL: %s\n", d3dxIniUtils.ToByteString(dll).c_str());
+
+				if (inject_dll_into_process(target_pid, dll.c_str())) {
+					printf("[DLL Injector] DLL 注入成功 :)\n");
+					success_count++;
+				} else {
+					printf("[DLL Injector] DLL 注入失败！\n");
+					fail_count++;
+				}
+
+				// 注入多个 DLL 时，在每次注入之间稍作等待，避免目标进程过载
+				if (i + 1 < d3dxIniUtils.extra_dlls.size()) {
+					Sleep(500);
+				}
 			}
+
+			printf("\n[DLL Injector] 注入完成: 成功 %d 个, 失败 %d 个\n", success_count, fail_count);
 		} else {
-			printf("[UnlockerIsland] 未找到目标进程！\n");
+			printf("[DLL Injector] 未找到目标进程！\n");
 		}
-		printf("[UnlockerIsland] ========================================\n\n");
+		printf("[DLL Injector] ========================================\n\n");
 	}
 
 	// 等待 3DMigoto 注入验证 + 5秒倒计时关闭
