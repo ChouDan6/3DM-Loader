@@ -4,29 +4,224 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <tlhelp32.h>
 #include <set>
 #include <string>
 #include <vector>
-#include <random>
-#include <ctime>
+#include <stdlib.h>
+#include <time.h>
+#include <locale.h>
 
 #include "D3dxIniUtils.hpp"
 
-// --- MODIFICATION START ---
-// 定义颜色常量
-#define FOREGROUND_RED_INTENSE      (FOREGROUND_RED | FOREGROUND_INTENSITY)
-#define FOREGROUND_WHITE_DEFAULT    (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE)
+#define COLOR_DEFAULT (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE)
+#define COLOR_MUTED   (FOREGROUND_BLUE | FOREGROUND_GREEN)
+#define COLOR_INFO    (FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_INTENSITY)
+#define COLOR_SUCCESS (FOREGROUND_GREEN | FOREGROUND_INTENSITY)
+#define COLOR_WARNING (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY)
+#define COLOR_ERROR   (FOREGROUND_RED | FOREGROUND_INTENSITY)
 
-// 设置控制台文本颜色的辅助函数
-void SetConsoleColor(WORD color) {
+static WORD g_default_console_color = COLOR_DEFAULT;
+
+static void SetConsoleColor(WORD color)
+{
 	SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color);
 }
-// --- MODIFICATION END ---
+
+static int console_printf_utf8(const char* format, ...)
+{
+	char stack_buffer[4096];
+	std::vector<char> heap_buffer;
+	char* buffer = stack_buffer;
+	int size = sizeof(stack_buffer);
+
+	va_list args;
+	va_start(args, format);
+	int needed = vsnprintf(buffer, size, format, args);
+	va_end(args);
+
+	if (needed < 0)
+		return needed;
+
+	if (needed >= size) {
+		heap_buffer.resize((size_t)needed + 1);
+		buffer = heap_buffer.data();
+		va_start(args, format);
+		needed = vsnprintf(buffer, (size_t)needed + 1, format, args);
+		va_end(args);
+		if (needed < 0)
+			return needed;
+	}
+
+	HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+	DWORD mode = 0;
+	if (out != INVALID_HANDLE_VALUE && GetConsoleMode(out, &mode)) {
+		int wide_len = MultiByteToWideChar(CP_UTF8, 0, buffer, needed, NULL, 0);
+		if (wide_len > 0) {
+			std::wstring wide((size_t)wide_len, L'\0');
+			MultiByteToWideChar(CP_UTF8, 0, buffer, needed, &wide[0], wide_len);
+			DWORD written = 0;
+			WriteConsoleW(out, wide.c_str(), (DWORD)wide.size(), &written, NULL);
+			return needed;
+		}
+	}
+
+	fwrite(buffer, 1, needed, stdout);
+	return needed;
+}
+
+#define printf console_printf_utf8
+
+static void ResetConsoleColor()
+{
+	SetConsoleColor(g_default_console_color);
+}
+
+static void init_console_ui()
+{
+	setlocale(LC_ALL, ".UTF-8");
+	SetConsoleOutputCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
+	SetConsoleTitleW(L"3DMigoto Loader");
+
+	CONSOLE_SCREEN_BUFFER_INFO info;
+	if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info))
+		g_default_console_color = info.wAttributes;
+}
+
+static void print_status(const char* label, const char* message, WORD color)
+{
+	SetConsoleColor(color);
+	printf("[%s]", label);
+	ResetConsoleColor();
+	printf(" %s\n", message);
+}
+
+static void print_section(const char* title)
+{
+	printf("\n");
+	SetConsoleColor(COLOR_INFO);
+	printf("== %s ==\n", title);
+	ResetConsoleColor();
+}
+
+static int utf8_display_width(const std::string& text)
+{
+	int width = 0;
+	for (size_t i = 0; i < text.size();) {
+		unsigned char c = (unsigned char)text[i];
+		if (c < 0x80) {
+			width++;
+			i++;
+		}
+		else {
+			width += 2;
+			do { i++; } while (i < text.size() && (((unsigned char)text[i] & 0xC0) == 0x80));
+		}
+	}
+	return width;
+}
+
+static void print_padded_text(const std::string& text, int width)
+{
+	int text_width = utf8_display_width(text);
+	int padding = width - text_width;
+	if (padding < 0)
+		padding = 0;
+
+	int left = padding / 2;
+	int right = padding - left;
+	for (int i = 0; i < left; ++i) printf(" ");
+	printf("%s", text.c_str());
+	for (int i = 0; i < right; ++i) printf(" ");
+}
+
+static void print_banner()
+{
+	std::vector<std::string> greetings = {
+		"祝你天天开心，万事胜意！",
+		"愿你眼里的星星，永远闪亮。",
+		"今天也要元气满满哦！",
+		"代码敲得开心，Bug一扫而空！",
+		"愿所有美好，与你不期而遇。",
+		"愿你抽卡出金，强化不歪！",
+		"游戏启动，烦恼清空！",
+		"注入成功，开始享受吧！",
+		"编译一次通过，运行没有警告！",
+		"Hello World, Hello You!"
+	};
+
+	srand((unsigned int)time(NULL));
+	const std::string& greeting = greetings[rand() % greetings.size()];
+	const int inner_width = 29;
+
+	printf("\n");
+	SetConsoleColor(COLOR_ERROR);
+	printf("      ******       ******      \n");
+	printf("    **********   **********    \n");
+	printf("  ************* *************  \n");
+	printf(" ***************************** \n");
+	printf("*******************************\n");
+	printf("*");
+	ResetConsoleColor();
+	print_padded_text(greeting, inner_width);
+	SetConsoleColor(COLOR_ERROR);
+	printf("*\n");
+	printf("*******************************\n");
+	printf(" ***************************** \n");
+	printf("  ***************************  \n");
+	printf("    ***********************    \n");
+	printf("      *******************      \n");
+	printf("        ***************        \n");
+	printf("          ***********          \n");
+	printf("            *******            \n");
+	printf("              ***              \n");
+	ResetConsoleColor();
+	printf("        3DMigoto Loader\n");
+	printf("        By 影 & LucyTtk\n\n");
+}
+
+static bool is_process_elevated()
+{
+	HANDLE token = NULL;
+	TOKEN_ELEVATION elevation = {};
+	DWORD size = sizeof(elevation);
+
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+		return false;
+
+	bool elevated = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size) && elevation.TokenIsElevated;
+	CloseHandle(token);
+	return elevated;
+}
+
+static int get_close_delay(D3dxIniUtils& config)
+{
+	if (config.delay.empty())
+		return 5;
+
+	int delay = atoi(config.ToByteString(config.delay).c_str());
+	return delay < -1 ? 5 : delay;
+}
+
+static void print_loader_summary(D3dxIniUtils& config)
+{
+	std::string launch = config.launch.empty() ? "未配置" : config.ToByteString(config.launch);
+
+	print_section("配置摘要");
+	printf("目标进程   : %s\n", config.ToByteString(config.target).c_str());
+	printf("3DM 模块   : %s\n", config.ToByteString(config.module).c_str());
+	printf("自动启动   : %s\n", launch.c_str());
+	if (!config.launch_args.empty())
+		printf("启动参数   : %s\n", config.ToByteString(config.launch_args).c_str());
+	printf("额外 DLL   : %zu 个\n", config.extra_dlls.size());
+	printf("关闭延迟   : %d 秒\n", get_close_delay(config));
+}
 
 static void wait_keypress(std::string msg)
 {
-	puts(msg.c_str());
+	printf("%s\n", msg.c_str());
 	getchar();
 }
 
@@ -447,6 +642,7 @@ static bool inject_dll_into_process(DWORD pid, const wchar_t* dll_path)
 
 int main()
 {
+	init_console_ui();
 	wchar_t setting_w[MAX_PATH], working_dir[MAX_PATH], * working_dir_p = NULL;
 	wchar_t module_full_path[MAX_PATH];
 	int rc = EXIT_FAILURE;
@@ -460,91 +656,33 @@ int main()
 	if (GetLastError() == ERROR_ALREADY_EXISTS)
 		wait_exit(EXIT_FAILURE, "ERROR: Another instance of the 3DMigoto Loader is already running. Please close it and try again\n");
 
-	// --- MODIFICATION START ---
-	// 祝福语列表
-	std::vector<std::string> greetings = {
-		"祝你天天开心，万事胜意！",
-		"愿你眼里的星星，永远闪亮。",
-		"今天也要元气满满哦！",
-		"代码敲得开心，Bug 一扫而空！",
-		"愿你今天也是快乐的一天！",
-		"愿所有美好，与你不期而遇。",
-		"保持热爱，奔赴山海。",
-		"今天也要好好爱自己呀。",
-		"生活是旷野，不是轨道。",
-		"别忘了抬头看看天上的月亮。",
-		"愿你抽卡出金，强化不歪！",
-		"游戏启动，烦恼清空！",
-		"404 Not Found: Your worries.",
-		"注入成功，开始享受吧！",
-		"rm -rf /your/troubles",
-		"别忘了抬头看看天上的月亮。",
-		"你超棒的，你知道吗！",
-		"愿风神忽悠你！",
-		"编译一次通过，运行没有警告！",
-		"Hello World, Hello You!"
-	};
-
-	// 设置随机数种子
-	srand(static_cast<unsigned int>(time(0)));
-	// 选择一条随机的祝福语
-	const std::string& random_greeting = greetings[rand() % greetings.size()];
-
-	// 计算总宽度和内外边距
-	int heart_inner_width = 29; // 心形最宽处内部的宽度
-	int greeting_len_display = 0; // 计算显示长度（中文算2，英文算1）
-	for (char c : random_greeting) {
-		greeting_len_display += ((unsigned char)c > 127) ? 2 : 1;
-	}
-	// 重新计算中英文混合后的总长度
-	greeting_len_display = (random_greeting.length() + greeting_len_display) / 2;
-
-	int padding_total = heart_inner_width - greeting_len_display;
-	int padding_left = padding_total / 2;
-	int padding_right = padding_total - padding_left;
-
-	printf("\n");
-	SetConsoleColor(FOREGROUND_RED_INTENSE); // 设置为红色
-	printf("      ******       ******      \n");
-	printf("    **********   **********    \n");
-	printf("  ************* *************  \n");
-	printf(" ***************************** \n");
-	printf("*******************************\n");
-
-	// 打印带居中祝福语的一行
-	printf("*");
-	for (int i = 0; i < padding_left; ++i) printf(" ");
-	SetConsoleColor(FOREGROUND_WHITE_DEFAULT); // 祝福语用默认白色
-	printf("%s", random_greeting.c_str());
-	SetConsoleColor(FOREGROUND_RED_INTENSE); // 换回红色
-	for (int i = 0; i < padding_right; ++i) printf(" ");
-	printf("*\n");
-
-	printf("*******************************\n");
-	printf(" ***************************** \n");
-	printf("  ***************************  \n");
-	printf("    ***********************    \n");
-	printf("      *******************      \n");
-	printf("        ***************        \n");
-	printf("          ***********          \n");
-	printf("            *******            \n");
-	printf("              ***              \n");
-	SetConsoleColor(FOREGROUND_WHITE_DEFAULT); // 恢复默认颜色
-	printf("         By 影 & LucyTtk\n");
-	printf("\n");
-	// --- MODIFICATION END ---
+	print_banner();
 
 
 	D3dxIniUtils d3dxIniUtils(L"d3dx.ini");
+	if (!d3dxIniUtils.parse_error.empty()) {
+		std::string error = "配置错误: " + d3dxIniUtils.ToByteString(d3dxIniUtils.parse_error);
+		print_status("错误", error.c_str(), COLOR_ERROR);
+		wait_exit(EXIT_FAILURE, "\n请检查 d3dx.ini 的 [Loader] 配置后重试。\n按 Enter 关闭...\n");
+	}
+
+	print_loader_summary(d3dxIniUtils);
+	if (d3dxIniUtils.require_admin && !is_process_elevated()) {
+		print_status("警告", "配置要求管理员权限，建议右键以管理员身份运行本程序。", COLOR_WARNING);
+	}
 
 	module = LoadLibraryA(d3dxIniUtils.ToByteString(d3dxIniUtils.module).c_str());
 	if (!module) {
-		printf("Unable to load 3DMigoto \"%s\"\n", d3dxIniUtils.ToByteString(d3dxIniUtils.module).c_str());
+		std::string error = "无法加载 3DMigoto 模块: " + d3dxIniUtils.ToByteString(d3dxIniUtils.module);
+		print_status("错误", error.c_str(), COLOR_ERROR);
 		wait_exit(EXIT_FAILURE);
 	}
 
 	GetModuleFileName(module, module_full_path, MAX_PATH);
-	printf("Loaded %S\n\n", module_full_path);
+	SetConsoleColor(COLOR_SUCCESS);
+	printf("[OK]");
+	ResetConsoleColor();
+	printf(" 已加载 3DMigoto: %S\n\n", module_full_path);
 
 
 	fn = GetProcAddress(module, "CBTProc");
@@ -570,54 +708,65 @@ int main()
 
 	launch = d3dxIniUtils.launch != L"";
 	if (launch) {
-		std::string outmsg = "3DMigoto ready, launching \"%s\"...\n" + d3dxIniUtils.ToByteString(d3dxIniUtils.launch);
-		printf(outmsg.c_str());
+		std::string launch_path = d3dxIniUtils.ToByteString(d3dxIniUtils.launch);
+		print_section("启动目标");
+		printf("正在启动: %s\n", launch_path.c_str());
+		if (!d3dxIniUtils.launch_args.empty())
+			printf("启动参数: %s\n", d3dxIniUtils.ToByteString(d3dxIniUtils.launch_args).c_str());
 
 		CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-		if (!MultiByteToWideChar(CP_UTF8, 0, d3dxIniUtils.ToByteString(d3dxIniUtils.launch).c_str(), -1, setting_w, MAX_PATH))
+		if (!MultiByteToWideChar(CP_UTF8, 0, launch_path.c_str(), -1, setting_w, MAX_PATH))
 			wait_exit(EXIT_FAILURE, "Invalid launch setting\n");
 
 		working_dir_p = deduce_working_directory(setting_w, working_dir);
 
-		ShellExecute(NULL, NULL, setting_w, NULL, working_dir_p, SW_SHOWNORMAL);
+		HINSTANCE shell_result = ShellExecuteW(NULL, NULL, setting_w,
+			d3dxIniUtils.launch_args.empty() ? NULL : d3dxIniUtils.launch_args.c_str(),
+			working_dir_p, SW_SHOWNORMAL);
+		if ((INT_PTR)shell_result <= 32) {
+			print_status("错误", "启动目标失败，请检查 launch 路径和权限。", COLOR_ERROR);
+		}
+		else {
+			print_status("成功", "启动命令已发送，正在等待目标进程。", COLOR_SUCCESS);
+		}
 	}
 	else {
-		printf("3DMigoto 已就绪 - 请启动游戏。\n");
+		print_status("就绪", "3DMigoto 已就绪，请启动游戏。", COLOR_SUCCESS);
 	}
 
 	// 如果配置了额外的 DLL（unlocker_dll 和/或 extra_dll），等待目标进程出现并逐一注入
 	if (!d3dxIniUtils.extra_dlls.empty()) {
-		printf("\n[DLL Injector] ========================================\n");
-		printf("[DLL Injector] 共发现 %zu 个额外 DLL 需要注入\n", d3dxIniUtils.extra_dlls.size());
-		printf("[DLL Injector] target 配置值: %s\n", d3dxIniUtils.ToByteString(d3dxIniUtils.target).c_str());
+		print_section("额外 DLL 注入");
+		printf("[DLL注入] 共发现 %zu 个额外 DLL 需要注入\n", d3dxIniUtils.extra_dlls.size());
+		printf("[DLL注入] target 配置值: %s\n", d3dxIniUtils.ToByteString(d3dxIniUtils.target).c_str());
 
 		for (size_t i = 0; i < d3dxIniUtils.extra_dlls.size(); i++) {
-			printf("[DLL Injector]   [%zu] %s\n", i + 1, d3dxIniUtils.ToByteString(d3dxIniUtils.extra_dlls[i]).c_str());
+			printf("[DLL注入]   [%zu] %s\n", i + 1, d3dxIniUtils.ToByteString(d3dxIniUtils.extra_dlls[i]).c_str());
 		}
 
 		wchar_t cwd[MAX_PATH];
 		if (GetCurrentDirectoryW(MAX_PATH, cwd)) {
-			printf("[DLL Injector] 当前工作目录: %S\n", cwd);
+			printf("[DLL注入] 当前工作目录: %S\n", cwd);
 		}
 
-		printf("[DLL Injector] 正在等待目标进程出现...\n");
+		printf("[DLL注入] 正在等待目标进程出现...\n");
 		DWORD target_pid = wait_for_target_pid(d3dxIniUtils.ToByteString(d3dxIniUtils.target).c_str(), launch);
 		if (target_pid != 0) {
-			printf("[DLL Injector] 找到目标进程 (PID: %d)\n", target_pid);
+			printf("[DLL注入] 找到目标进程 (PID: %d)\n", target_pid);
 
 			int success_count = 0;
 			int fail_count = 0;
 			for (size_t i = 0; i < d3dxIniUtils.extra_dlls.size(); i++) {
 				const std::wstring& dll = d3dxIniUtils.extra_dlls[i];
-				printf("\n[DLL Injector] --- 正在注入第 %zu/%zu 个 DLL ---\n", i + 1, d3dxIniUtils.extra_dlls.size());
-				printf("[DLL Injector] DLL: %s\n", d3dxIniUtils.ToByteString(dll).c_str());
+				printf("\n[DLL注入] --- 正在注入第 %zu/%zu 个 DLL ---\n", i + 1, d3dxIniUtils.extra_dlls.size());
+				printf("[DLL注入] DLL: %s\n", d3dxIniUtils.ToByteString(dll).c_str());
 
 				if (inject_dll_into_process(target_pid, dll.c_str())) {
-					printf("[DLL Injector] DLL 注入成功 :)\n");
+					print_status("成功", "DLL 注入成功。", COLOR_SUCCESS);
 					success_count++;
 				} else {
-					printf("[DLL Injector] DLL 注入失败！\n");
+					print_status("失败", "DLL 注入失败。", COLOR_ERROR);
 					fail_count++;
 				}
 
@@ -627,17 +776,21 @@ int main()
 				}
 			}
 
-			printf("\n[DLL Injector] 注入完成: 成功 %d 个, 失败 %d 个\n", success_count, fail_count);
+			printf("\n[DLL注入] 注入完成: 成功 %d 个, 失败 %d 个\n", success_count, fail_count);
 		} else {
-			printf("[DLL Injector] 未找到目标进程！\n");
+			printf("[DLL注入] 未找到目标进程！\n");
 		}
-		printf("[DLL Injector] ========================================\n\n");
+		printf("\n");
 	}
 
 	// 等待 3DMigoto 注入验证 + 5秒倒计时关闭
-	wait_for_target(d3dxIniUtils.ToByteString(d3dxIniUtils.target).c_str(), module_full_path, true, 5, launch);
+	wait_for_target(d3dxIniUtils.ToByteString(d3dxIniUtils.target).c_str(), module_full_path, true, get_close_delay(d3dxIniUtils), launch);
 
 	UnhookWindowsHookEx(hook);
 
 	return rc;
 }
+
+
+
+

@@ -8,6 +8,7 @@
 #include <string>
 #include <stdexcept>
 #include <vector>
+#include <algorithm>
 
 class D3dxIniUtils {
 public:
@@ -31,7 +32,7 @@ public:
 
 	D3dxIniUtils(std::wstring d3dxIniFilePath) {
 		//从指定路径中读取d3dx.ini并解析内容到类的属性中，目前我们只需要解析
-		char* buf, target[MAX_PATH], launch[MAX_PATH], module_path[MAX_PATH];
+		char target[MAX_PATH], launch[MAX_PATH], module_path[MAX_PATH], delay[MAX_PATH];
 
 		//仅用于临时兼容性测试
 		char launch_args[MAX_PATH];
@@ -42,21 +43,24 @@ public:
 		int rc = EXIT_FAILURE;
 		HANDLE ini_file;
 
-		ini_file = CreateFile(L"d3dx.ini", GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		ini_file = CreateFileW(d3dxIniFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (ini_file == INVALID_HANDLE_VALUE) {
 			parse_error = L"无法打开d3dx.ini\n";
 			return;
 		}
 
 		filesize = GetFileSize(ini_file, NULL);
-		buf = new char[filesize + 1];
-		if (!buf) {
-			parse_error = L"无法为d3dx.ini分配缓冲区\n";
+		if (filesize == INVALID_FILE_SIZE) {
+			parse_error = L"无法获取d3dx.ini大小\n";
+			CloseHandle(ini_file);
 			return;
 		}
 
-		if (!ReadFile(ini_file, buf, filesize, &readsize, 0) || filesize != readsize) {
+		std::vector<char> buf(filesize + 1);
+
+		if (!ReadFile(ini_file, buf.data(), filesize, &readsize, 0) || filesize != readsize) {
 			parse_error = L"无法读取d3dx.ini\n";
+			CloseHandle(ini_file);
 			return;
 		}
 
@@ -65,7 +69,7 @@ public:
 
 		CloseHandle(ini_file);
 
-		ini_section = find_ini_section_lite(buf, "loader");
+		ini_section = find_ini_section_lite(buf.data(), "loader");
 		if (!ini_section) {
 			parse_error = L"d3dx.ini 缺少所需的 [Loader] 部分\n";
 			return;
@@ -100,6 +104,10 @@ public:
 			this->launch_args = ToWideString(std::string(launch_args));
 		}
 
+		if (find_ini_setting_lite(ini_section, "delay", delay, MAX_PATH)) {
+			this->delay = ToWideString(std::string(delay));
+		}
+
 		char unlocker_dll_path[MAX_PATH];
 		if (find_ini_setting_lite(ini_section, "unlocker_dll", unlocker_dll_path, MAX_PATH)) {
 			this->unlocker_dll = ToWideString(std::string(unlocker_dll_path));
@@ -109,7 +117,6 @@ public:
 		// Parse extra_dll entries: extra_dll, extra_dll_1, extra_dll_2, ...
 		find_all_indexed_settings(ini_section, "extra_dll", this->extra_dlls);
 
-		delete[] buf;
 	}
 
 
@@ -264,29 +271,36 @@ public:
 	}
 
 
-	// Find all settings matching "base_name" and "base_name_N" (N=1,2,3,...) 
-	// and append their values to the results vector.
+	// Find all settings matching "base_name", "base_name_N", and "base_nameN"
+	// (N=1,2,3,...) and append their values to the results vector.
 	void find_all_indexed_settings(const char* ini_section, const char* base_name, std::vector<std::wstring>& results)
 	{
 		char val[MAX_PATH];
+		auto append_unique = [&results](const std::wstring& value) {
+			if (!value.empty() && std::find(results.begin(), results.end(), value) == results.end())
+				results.push_back(value);
+		};
 
 		// First try the base name itself: extra_dll = xxx
 		if (find_ini_setting_lite(ini_section, base_name, val, MAX_PATH)) {
-			std::wstring w = ToWideString(std::string(val));
-			if (!w.empty())
-				results.push_back(w);
+			append_unique(ToWideString(std::string(val)));
 		}
 
-		// Then try indexed: extra_dll_1, extra_dll_2, ..., up to a reasonable limit
+		// Then try indexed: extra_dll_1 / extra_dll1, up to a reasonable limit
 		for (int i = 1; i <= 32; i++) {
 			char key[64];
+
 			sprintf_s(key, sizeof(key), "%s_%d", base_name, i);
 			if (find_ini_setting_lite(ini_section, key, val, MAX_PATH)) {
-				std::wstring w = ToWideString(std::string(val));
-				if (!w.empty())
-					results.push_back(w);
+				append_unique(ToWideString(std::string(val)));
+			}
+
+			sprintf_s(key, sizeof(key), "%s%d", base_name, i);
+			if (find_ini_setting_lite(ini_section, key, val, MAX_PATH)) {
+				append_unique(ToWideString(std::string(val)));
 			}
 		}
 	}
 
 };
+
